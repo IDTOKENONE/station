@@ -2,13 +2,14 @@ import { useMemo } from "react"
 import { useQuery } from "react-query"
 import axios, { AxiosError } from "axios"
 import BigNumber from "bignumber.js"
-import { OracleParams, ValAddress } from "@terra-money/terra.js"
+import { OracleParams, ValAddress, Validator } from "@terra-money/terra.js"
 import { TerraValidator } from "types/validator"
 import { TerraProposalItem } from "types/proposal"
 import { useNetwork } from "data/wallet"
 import { useOracleParams } from "data/queries/oracle"
 import { useNetworks } from "app/InitNetworks"
 import { queryKey, RefetchOptions } from "../query"
+import { useValidators } from "data/queries/staking"
 
 export enum Aggregate {
   PERIODIC = "periodic",
@@ -120,19 +121,25 @@ export const useTerraProposal = (id: number) => {
 }
 
 /* helpers */
-export const getCalcVotingPowerRate = (TerraValidators: TerraValidator[]) => {
+export const getCalcVotingPowerRate = (validators: Validator[]) => {
   const total = BigNumber.sum(
-    ...TerraValidators.map(({ voting_power = 0 }) => voting_power)
+    ...validators
+      .filter(
+        ({ status }) => (status as unknown as string) === "BOND_STATUS_BONDED"
+      )
+      .map(({ tokens }) => tokens.toString())
   ).toNumber()
 
   return (address: ValAddress) => {
-    const validator = TerraValidators.find(
+    const validator = validators.find(
       ({ operator_address }) => operator_address === address
     )
 
     if (!validator) return
-    const { voting_power } = validator
-    return voting_power ? Number(validator.voting_power) / total : undefined
+    const { tokens, status } = validator
+    return (status as unknown as string) === "BOND_STATUS_BONDED"
+      ? Number(tokens ?? 0) / total
+      : 0
   }
 }
 
@@ -151,11 +158,12 @@ export const getCalcUptime = ({ slash_window }: OracleParams) => {
 }
 
 export const useVotingPowerRate = (address: ValAddress) => {
-  const { data: TerraValidators, ...state } = useTerraValidators()
+  const { data: validators, ...state } = useValidators()
+
   const calcRate = useMemo(() => {
-    if (!TerraValidators) return
-    return getCalcVotingPowerRate(TerraValidators)
-  }, [TerraValidators])
+    if (!validators) return
+    return getCalcVotingPowerRate(validators)
+  }, [validators])
 
   const data = useMemo(() => {
     if (!calcRate) return
